@@ -232,10 +232,34 @@ class DocGen
           document_class_method(m)
         end
       end
+ 
+      if h=DocGen.overides[@q]
+        h.keys.sort.find_all do |k|
+          !(@output[:functions].map do |f| f[:name].to_s end).index(k.to_s)
+        end.each do |k|
+          k = k.to_s
+          def k.name
+            self
+          end
+          
+          document_method(k)
+        end
+      end      
+      
       print("\r Extracted #{@q}"+(" "*40)+"\n")
     end
     
     def document_method(m, takes_self=false)
+      if z=DocGen.overides[@q]
+        if b=z[m.name.to_sym]
+          method=DocGen::Output::Function.new
+          method[:name] = m.name
+          b.call(method)
+          @output[:functions] << method
+          return()
+        end
+      end
+      
       if takes_self
         rm = @q.girffi_instance_method(m.name.to_sym)
         method = DocGen::Output::Function.new(:method=>true)
@@ -407,6 +431,16 @@ class DocGen
     
     return @namespace
   end
+  
+  @overides = {}
+  
+  def self.overide q,m,&b
+    (@overides[q] ||= {})[m] = b
+  end
+  
+  def self.overides
+    @overides
+  end
 end
 
  
@@ -435,7 +469,7 @@ module YARDGenerator
             puts "    # @param [#{a[:type][:name]}] #{a[:name]} #{a[:description]}#{default}" unless a[:block]
             if a[:block]
               a[:block][:parameters].each do |prm|
-                puts "    # @yieldparam [#{prm[:type]}] #{prm[:name]}"
+                puts "    # @yieldparam [#{prm[:type]}] #{prm[:name]} #{prm[:description]}"
               end
               
               puts "    # @yieldreturn [#{a[:block][:returns][:type][:name]}] #{a[:block][:returns][:description]}"
