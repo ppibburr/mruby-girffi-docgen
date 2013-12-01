@@ -22,7 +22,10 @@ Example
 
  # Document it
  dg = DocGen.new(Gtk)
- dg.document()
+ ns = dg.document()
+ 
+ # Write out dummy source files for use by YARD
+ YARDGenerator.generate(ns)
 ```
 
 YARD Output
