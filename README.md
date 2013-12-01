@@ -24,3 +24,24 @@ Example
  dg = DocGen.new(Gtk)
  dg.document()
 ```
+
+YARD Output
+===
+```ruby
+    # ...
+
+    # webkit_favicon_database_get_favicon_pixbuf
+    #
+    # @param [String] page_uri 
+    # @param [Integer] width 
+    # @param [Integer] height 
+    # @param [Gio::Cancellable] cancellable  defaults to `nil`
+    # @yieldparam [GObject::Object] source_object
+    # @yieldparam [FFI::Pointer] res
+    # @yieldreturn [void] 
+    # @return [NilClass] 
+    def get_favicon_pixbuf(page_uri,width,height,cancellable = nil)
+    end
+    
+    # ...
+```
