@@ -299,12 +299,15 @@ class DocGen
         method[:arguments] << a=Output::Argument.new()
         a[:name] = "b"
         a[:block] = b = Output::Block.new
-        aaa = m.args
-        cb = aaa.find do |a| a.closure >= 0 end
-        info = m.arg(aaa.index(cb)).argument_type.interface
+       
+        cb = rm.get_closure_argument
+       
+        info = cb.argument_type.interface
         info.extend GirFFI::Builder::MethodBuilder::Callable
+       
         yptypes, yrt = info.get_signature
         ft = GirFFI::FunctionTool.new(info) do end
+       
         take = []
         bbb = info.args
         bbb.each_with_index do |w,i|
@@ -330,6 +333,7 @@ class DocGen
             prm[:type] = :array
             prm[:array] = pa = Output::Array.new
             pa[:types] = [DocGen::ffi_type2ruby(prm.argument_type.flattened_array_type)]
+       
           else
             qq = DocGen.ruby_type(pt)
             prm[:type] = qq[0]
@@ -345,9 +349,7 @@ class DocGen
         yrtt[:name] = yrtd[0]
         yrt[:description] = yrtd[1]
         
-        
-        t=a[:type] = Output::Type.new
-        t[:name] = "Proc"
+        t=a[:type] = :block
         a[:description] = "The block to call" 
       end
       
