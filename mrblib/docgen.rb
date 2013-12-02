@@ -215,7 +215,13 @@ class DocGen
     "break",
     "next",
     "when",
-    "return"
+    "return",
+    "alias",
+    "in",
+    "begin",
+    "rescue",
+    "retry",
+    "def"
   ]
 
   def self.safe_name(n)
@@ -323,6 +329,12 @@ class DocGen
   end
   
   def self.document_method ns, w, m, takes_self = false
+    if z=DocGen.skips[w.q]
+      if b=z[m.name.to_sym]
+        return
+      end
+    end
+  
     if z=DocGen.overides[w.q]
       if b=z[m.name.to_sym]
         method=DocGen::Output::Function.new
@@ -492,6 +504,16 @@ class DocGen
   def self.overides
     @overides
   end
+  
+  @skips = {}
+  
+  def self.skip q,m
+    (@skips[q] ||= {})[m] = true
+  end
+  
+  def self.skips
+    @skips
+  end  
 end
 
  
