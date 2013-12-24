@@ -357,7 +357,7 @@ class DocGen
     def document_signal s
       sig = DocGen::Output::Signal.new
       sig[:name] = s.name.split("_").join("-")
-      exit if s.true_stops_emit
+      sig[:true_stops_emit] = s.true_stops_emit
       s.args.each do |a| 
         (sig[:arguments] ||= []) << arg=DocGen::Output::Argument.from_arg_info(a)
       end
@@ -789,6 +789,9 @@ module YARDGenerator
       puts "  # Signals" if idx == 0
       
       puts "  # [\"#{s.name}\" {|#{al}| ... }]" 
+      if s[:true_stops_emit]
+        puts "  #    * Returning `true` will stop emission of the signal"
+      end
       
       s.arguments.each_with_index do |a,aidx|
         puts "  #     *params*" if aidx == 0  
