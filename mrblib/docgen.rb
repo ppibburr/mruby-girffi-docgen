@@ -73,12 +73,74 @@ class DocGen
     class Array < ::Struct.new(:types); end
     
     class Argument < ::Struct.new(:description, :name, :type, :array, :omit, :block)
-    
+      def self.from_arg_info arg
+        n=DocGen::safe_name(arg.name)
+        
+        argument = DocGen::Output::Argument.new()        
+        
+        argument[:name] = n
+        
+        argument[:omit] = !!arg.may_be_null?
+        
+        if arg.argument_type.tag == :array
+          argument[:type] = :array
+          at = argument[:array] = DocGen::Output::Array.new
+          
+          at[:types] = [DocGen::ffi_type2ruby(arg.argument_type.flattened_array_type)].map do |ttt|
+            tttt = DocGen::Output::Type.new
+            tttt[:name] = ttt
+            tttt        
+          end
+        else
+          atype,desc = DocGen::ruby_type(arg)
+
+          t = argument[:type] = DocGen::Output::Type.new
+          t[:name] = atype
+          argument[:description] = desc
+        end 
+        
+        return argument     
+      end    
     end
     
     class Return < ::Struct.new(:description, :type,:array)
-    
+      def self.from_callable_info callable
+        ret = self.new
+      
+        rm = GirFFI::FunctionTool.new(callable) do end
+      
+        returns = rm.returns.map do |r|
+          DocGen::ruby_type(r)
+        end
+        
+        if returns[0] and returns[0][0] == "void"
+          returns.shift
+        end      
+      
+        if returns.length > 1
+          ret[:type] = :array
+          a = ret[:array] = DocGen::Output::Array.new
+          a[:types] = returns.map do |t,d|
+            o = DocGen::Output::Type.new
+            o[:name] = t
+            next o
+          end
+          
+        elsif returns.length == 1
+          t = ret[:type] = DocGen::Output::Type.new
+          t[:name] = returns[0][0]
+
+          ret[:description] = returns[0][1]
+        
+        else
+          ret[:type] = DocGen::Output::ReturnOfNilClass
+        end  
+        
+        return ret    
+      end
     end
+    
+    class Signal < Struct.new(:arguments, :returns, :name); end
     
     ReturnOfNilClass = t = Type.new
     t[:name] = "NilClass"
@@ -109,7 +171,7 @@ class DocGen
       end
     end
     
-    class IFace < ::Struct.new(:name, :namespace, :functions, :includes)
+    class IFace < ::Struct.new(:name, :namespace, :functions, :includes, :signals)
       def initialize h, q
         super()
         h[:interfaces] << self
@@ -125,7 +187,7 @@ class DocGen
       end
     end
     
-    class Class < ::Struct.new(:name, :namespace, :functions, :superclass, :includes)
+    class Class < ::Struct.new(:name, :namespace, :functions, :superclass, :includes, :signals)
       def initialize h, q
         super()
         
@@ -242,6 +304,11 @@ class DocGen
   
     def document
       print("\rExtracting #{@q}..."+(" "*40))
+
+      @q.signals.each do |s|
+        document_signal @q.get_signal(s)
+      end if @q.respond_to?(:signals)
+      
       @q.data.get_methods.each do |m|
         print("\rExtracting #{@q}")
         if m.method?
@@ -279,6 +346,19 @@ class DocGen
     
     def document_class_method m
       aa=document_method m      
+    end
+    
+    def document_signal s
+      sig = DocGen::Output::Signal.new
+      sig[:name] = s.name.split("_").join("-")
+
+      s.args.each do |a| 
+        (sig[:arguments] ||= []) << arg=DocGen::Output::Argument.from_arg_info(a)
+      end
+
+      sig[:returns] = DocGen::Output::Return.from_callable_info(s)
+      
+      (@output[:signals] ||= []) << sig
     end
   end
   
@@ -328,6 +408,140 @@ class DocGen
     DocGen.document_method(namespace, self, m)
   end
   
+  class Overide
+    attr_reader :method
+    def initialize m, &b
+      @method = m
+      instance_eval &b
+      if @block
+        (@method[:arguments] ||= []) << a=DocGen::Output::Argument.new
+        a[:type]  = :block
+        a[:block] = @block
+        a[:name] = "b"
+      end
+    end
+    
+    def scope t
+      @method[:method] = t==:instance
+    end
+    
+    def symbol sym
+      @method[:symbol] = sym
+    end
+    
+    def param h
+      name    = h.keys.first
+      type    = h[name][0]
+      desc    = h[name][1]
+      null    = h[name][2]
+      
+      type = get_type(type)
+      
+      a = DocGen::Output::Argument.new
+      
+      a[:name] = name
+      
+      if type.is_a?(DocGen::Output::Array)
+        a[:type] = :array
+        a[:array] = type
+      else
+        a[:type] = type
+      end
+      
+      a[:description] = desc
+      
+      a[:omit] = null
+      
+      (@method[:arguments] ||= []) << a
+      
+      return a
+    end
+    
+    def error!
+      @method[:error] = true
+    end
+    
+    def returns type,desc=""
+      r = DocGen::Output::Return.new
+      r[:description] = desc
+      
+      type = get_type(type)
+      if type.is_a?(DocGen::Output::Array)
+        r[:type] = :array
+        r[:array] = type
+      else
+        r[:type] = type
+      end
+      
+      @method[:returns] = r
+      
+      return r
+    end
+
+    def yieldparam h
+      @block ||= DocGen::Output::Block.new
+    
+      name    = h.keys.first
+      type    = h[name][0]
+      desc    = h[name][1]
+      null    = h[name][2]
+      
+      type = get_type(type)
+      
+      a = DocGen::Output::Argument.new
+      
+      a[:name] = name
+      
+      if type.is_a?(DocGen::Output::Array)
+        a[:type] = :array
+        a[:array] = type
+      else
+        a[:type] = type
+      end
+      
+      a[:description] = desc
+      
+      (@block[:parameters] ||= []) << a
+      
+      return a
+    end
+    
+    def yieldreturns type,desc=""
+      @block ||= DocGen::Output::Block.new
+      
+      r = DocGen::Output::Return.new
+      r[:description] = desc
+      
+      type = get_type(type)
+      if type.is_a?(DocGen::Output::Array)
+        r[:type] = :array
+        r[:array] = type
+      else
+        r[:type] = type
+      end
+      
+      @block[:returns] = r
+      
+      return r
+    end    
+    
+    def get_type type
+      if type.is_a?(Array)
+        ary = DocGen::Output::Array.new
+        ary[:types] = type.map do |t|
+          tt = DocGen::Output::Type.new
+          tt[:name] = t
+          tt
+        end
+        return ary
+      else
+        t = DocGen::Output::Type.new
+        t[:name] = type
+        return t
+      end
+    end
+  end
+  
   def self.document_method ns, w, m, takes_self = false
     if z=DocGen.skips[w.q]
       if b=z[m.name.to_sym]
@@ -339,7 +553,8 @@ class DocGen
       if b=z[m.name.to_sym]
         method=DocGen::Output::Function.new
         method[:name] = m.name
-        b.call(method)
+        method[:symbol] = m.respond_to?(:symbol) ? m.symbol : nil
+        Overide.new(method, &b)
         w.output[:functions] << method
         return()
       end
@@ -379,40 +594,15 @@ class DocGen
    
     bar.each do |k|
       arg = m.arg(k)
-      aa << n=DocGen::safe_name(arg.name)
       
-      argument = DocGen::Output::Argument.new()        
-      
-      argument[:name] = n
-      
-      argument[:omit] = !!arg.may_be_null?
-      
-      if arg.argument_type.tag == :array
-        argument[:type] = :array
-        at = argument[:array] = DocGen::Output::Array.new
-        
-        at[:types] = [DocGen::ffi_type2ruby(arg.argument_type.flattened_array_type)]
-      else
-        atype,desc = DocGen::ruby_type(arg)
-
-        t = argument[:type] = DocGen::Output::Type.new
-        t[:name] = atype
-        argument[:description] = desc
-      end
+      argument = DocGen::Output::Argument.from_arg_info(arg)
+      aa << argument[:name]
       
       method[:arguments] << argument        
-    end
-   
-    returns = rm.returns.map do |r|
-      DocGen::ruby_type(r)
     end
     
     if rm.throws?
       method[:error] = true
-    end
-    
-    if returns[0] and returns[0][0] == "void"
-      returns.shift
     end
     
     if rm.takes_block?
@@ -453,11 +643,16 @@ class DocGen
         if pt.argument_type.tag == :array
           prm[:type] = :array
           prm[:array] = pa = DocGen::Output::Array.new
-          pa[:types] = [DocGen::ffi_type2ruby(pt.argument_type.flattened_array_type)]
+          pa[:types] = [DocGen::ffi_type2ruby(pt.argument_type.flattened_array_type)].map do |ttt|
+            tttt = DocGen::Output::Type.new
+            tttt[:name] = ttt
+            tttt
+          end
      
         else
           qq = DocGen.ruby_type(pt)
-          prm[:type] = qq[0]
+          prm[:type] = pt2 = DocGen::Output::Type.new
+          pt2[:name] = qq[0]
           prm[:description] = qq[1]
         end
         prm
@@ -473,31 +668,13 @@ class DocGen
       a[:description] = "The block to call" 
     end
     
-    ret = method[:returns] = DocGen::Output::Return.new
-    
-    if returns.length > 1
-      ret[:type] = :array
-      a = ret[:array] = DocGen::Output::Array.new
-      a[:types] = returns.map do |t,d|
-        o = DocGen::Output::Type.new
-        o[:name] = t
-        next o
-      end
-      
-    elsif returns.length == 1
-      t = ret[:type] = DocGen::Output::Type.new
-      t[:name] = returns[0][0]
-
-      ret[:description] = returns[0][1]
-    
-    else
-      ret[:type] = DocGen::Output::ReturnOfNilClass
-    end
+    ret = method[:returns] = DocGen::Output::Return.from_callable_info(m)
   end
   
-  @overides = {}
+  @overides    = {}
+  @additionals = {}
   
-  def self.overide q,m,&b
+  def self.overide q,m, scope=nil, sym=nil,&b
     (@overides[q] ||= {})[m] = b
   end
   
@@ -535,30 +712,49 @@ module YARDGenerator
         puts "#{ident}# @param [#{a[:type][:name]}] #{a[:name]} #{a[:description]}#{default}" unless a[:block]
         if a[:block]
           a[:block][:parameters].each do |prm|
-            puts "#{ident}# @yieldparam [#{prm[:type]}] #{prm[:name]} #{prm[:description]}"
+            if prm[:type] == :array
+              pta = prm[:array][:types].map do |qt| qt[:name] end.join(", ")
+              puts "#{ident}# @yieldparam [Array<#{pta}>] #{prm[:name]} #{prm[:description]}"
+            else
+              puts "#{ident}# @yieldparam [#{prm[:type][:name]}] #{prm[:name]} #{prm[:description]}"
+            end
           end
           
-          puts "#{ident}# @yieldreturn [#{a[:block][:returns][:type][:name]}] #{a[:block][:returns][:description]}"
+          if a[:block][:returns][:type] == :array
+            pta  = a[:block][:returns][:array][:types].map do |qt| qt[:name] end.join(", ")
+            puts "#{ident}# @yieldreturn [Array<#{pta}>] #{a[:block][:returns][:description]}"
+          else
+            puts "#{ident}# @yieldreturn [#{a[:block][:returns][:type][:name]}] #{a[:block][:returns][:description]}"
+          end
         end
       else
-        puts "#{ident}# @param [Array<#{a[:array][:types].join(", ")}>] #{a[:name]}#{default}"
+        z = a[:array][:types].map do |qt| qt[:name] end.join(", ")
+        puts "#{ident}# @param [Array<#{z}>] #{a[:name]}#{default} #{a[:description]}"
       end
+    end
+    
+    if m[:error]
+      puts "#{ident}# @raise [RuntimeError]"
     end
 
     unless m[:returns][:array]
       puts "#{ident}# @return [#{m[:returns][:type][:name]}] #{m[:returns][:description]}"
     else
       rtypes = m[:returns][:array][:types].map do |t| t[:name] end
-      puts "#{ident}# @return [Array<#{rtypes.join(", ")}>]"
+      puts "#{ident}# @return [Array<#{rtypes.join(", ")}>] #{m[:returns][:description]}"
     end
 
     ins = ""
-    ins = "self." if m.is_constructor?
+    ins = "self." unless m.is_method?
 
     args = m.arguments.map do |a|
        default = ""
        if a[:omit]
          default = " = nil"
+       end
+       
+       if a[:default]
+         default = " = #{a[:default]}"
        end
        
        n = a[:name]
@@ -576,33 +772,56 @@ module YARDGenerator
     puts ""  
   end
   
+  def self.generate_iface i,ns
+    @buffer = []
+    
+    puts "module #{ns[:name]}"
+    
+    (i[:signals] ||= []).each_with_index do |s,idx|
+      al = (s.arguments ||= []).map do |a| a[:name] end.join(", ")
+    
+      puts "  # Signals" if idx == 0
+      
+      puts "  # [\"#{s.name}\" {|#{al}| ... }]" 
+      
+      s.arguments.each_with_index do |a,aidx|
+        puts "  #     *params*" if aidx == 0     
+        puts "  #     * ({#{a[:type][:name]}}) #{a.name}"
+      end
+      
+      puts "  #     "
+      puts "  #     *returns*"  
+      puts "  #     * ({#{s.returns[:type][:name]}})"
+    end
+    
+    if i.is_a?(DocGen::Output::Class)
+      puts "  class #{i[:name]} < #{i[:superclass]}"
+    else
+      puts "  module #{i[:name]}"
+    end
+    
+    i[:includes].each do |ii|
+      puts "    include #{ii}"
+    end      
+    
+    i[:functions].each do |m|
+      write_function(m)
+    end
+    
+    puts "  end"
+    puts "end"
+    puts ""
+    
+    out = "#{ns[:name]}_#{i[:name]}.rb".downcase
+    print "\rGenerating #{out} ..."+(" "*30)
+    GLib::File.set_contents(out,@buffer.join("\n"))  
+  end
+  
   def self.generate(ns)
+    ns = ns.namespace
+  
     ns[:interfaces].each do |i|
-      @buffer = []
-      
-      puts "module #{ns[:name]}"
-      
-      if i.is_a?(DocGen::Output::Class)
-        puts "  class #{i[:name]} < #{i[:superclass]}"
-      else
-        puts "  module #{i[:name]}"
-      end
-      
-      i[:includes].each do |ii|
-        puts "    include #{ii}"
-      end      
-      
-      i[:functions].each do |m|
-        write_function(m)
-      end
-      
-      puts "  end"
-      puts "end"
-      puts ""
-      
-      out = "#{ns[:name]}_#{i[:name]}.rb".downcase
-      print "\rGenerating #{out} ..."+(" "*30)
-      GLib::File.set_contents(out,@buffer.join("\n"))
+      generate_iface(i,ns)
     end
    
     @buffer = []
