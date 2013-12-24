@@ -104,7 +104,7 @@ class DocGen
     end
     
     class Return < ::Struct.new(:description, :type,:array)
-      def self.from_callable_info callable
+      def self.from_callable_info callable, sig=false
         ret = self.new
       
         rm = GirFFI::FunctionTool.new(callable) do end
@@ -115,6 +115,11 @@ class DocGen
         
         if returns[0] and returns[0][0] == "void"
           returns.shift
+        end
+        
+        if sig
+          returns = [returns[0]]
+          returns = [] if !returns[0]
         end      
       
         if returns.length > 1
@@ -140,7 +145,7 @@ class DocGen
       end
     end
     
-    class Signal < Struct.new(:arguments, :returns, :name); end
+    class Signal < Struct.new(:arguments, :returns, :name,:true_stops_emit); end
     
     ReturnOfNilClass = t = Type.new
     t[:name] = "NilClass"
@@ -306,6 +311,7 @@ class DocGen
       print("\rExtracting #{@q}..."+(" "*40))
 
       @q.signals.each do |s|
+        print("\r: \"#{s}\"."+(" "*40))
         document_signal @q.get_signal(s)
       end if @q.respond_to?(:signals)
       
@@ -351,12 +357,12 @@ class DocGen
     def document_signal s
       sig = DocGen::Output::Signal.new
       sig[:name] = s.name.split("_").join("-")
-
+      exit if s.true_stops_emit
       s.args.each do |a| 
         (sig[:arguments] ||= []) << arg=DocGen::Output::Argument.from_arg_info(a)
       end
 
-      sig[:returns] = DocGen::Output::Return.from_callable_info(s)
+      sig[:returns] = DocGen::Output::Return.from_callable_info(s,true)
       
       (@output[:signals] ||= []) << sig
     end
@@ -785,13 +791,25 @@ module YARDGenerator
       puts "  # [\"#{s.name}\" {|#{al}| ... }]" 
       
       s.arguments.each_with_index do |a,aidx|
-        puts "  #     *params*" if aidx == 0     
-        puts "  #     * ({#{a[:type][:name]}}) #{a.name}"
+        puts "  #     *params*" if aidx == 0  
+        if ary=a[:array]
+          puts "  #     * (Array<#{ary}>) #{a.name}"
+        else   
+          puts "  #     * ({#{a[:type][:name]}}) #{a.name}"
+        end
       end
       
       puts "  #     "
       puts "  #     *returns*"  
-      puts "  #     * ({#{s.returns[:type][:name]}})"
+      if ary=s.returns[:array]
+        p i
+        am = ary.types.map do |q|
+          "{#{q[:name]}}"
+        end.join(", ")
+        puts "  #     * (Array<#{am}>)"
+      else
+        puts "  #     * ({#{s.returns[:type][:name]}})"
+      end
     end
     
     if i.is_a?(DocGen::Output::Class)
