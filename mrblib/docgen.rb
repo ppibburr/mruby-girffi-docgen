@@ -103,6 +103,53 @@ class DocGen
       end    
     end
     
+    class Enum < ::Struct.new(:values); end
+    
+    
+    class Flags < ::Struct.new(:values); end
+    
+    class Constant < ::Struct.new(:name, :value, :class, :type, :enum, :flag)
+      def self.from_constant_info c
+        o = new
+        o[:type] = :constant
+        o[:name] = c.name
+        begin
+          o[:value] = c.value
+          o[:class] = c.value.class
+        rescue
+          o[:value] = nil
+          o[:class] = ::Object     
+        end
+        return o
+      end
+      
+      def self.from_flags_info c
+        o = new
+        o[:flag] = Flags.new
+        o[:type] = :flag
+        values = {}
+        c.get_values.map do |v|
+          values[v.name] =  v.value
+        end
+        o[:flag][:values] = values
+        o[:name] = c.name
+        return o
+      end
+      
+      def self.from_enum_info c
+        o = new
+        o[:enum] = Enum.new
+        o[:type] = :enum
+        values = {}
+        c.get_values.map do |v|
+          values[v.name] =  v.value
+        end
+        o[:enum][:values] = values
+        o[:name] = c.name
+        return o
+      end      
+    end    
+    
     class Return < ::Struct.new(:description, :type,:array)
       def self.from_callable_info callable, sig=false
         ret = self.new
@@ -176,7 +223,7 @@ class DocGen
       end
     end
     
-    class IFace < ::Struct.new(:name, :namespace, :functions, :includes, :signals)
+    class IFace < ::Struct.new(:name, :namespace, :functions, :includes, :signals, :full_includes, :implementing)
       def initialize h, q
         super()
         h[:interfaces] << self
@@ -189,10 +236,17 @@ class DocGen
         end
 
         self[:includes] = w
+        
+        w=q.ancestors.find_all do |a|
+          bool = a.class == ::Module
+          bool and a != q and !a.is_a?(GirFFI::Builder::ObjectBuilder::Interface)  and a != ::Kernel
+        end        
+
+        self[:full_includes] = w                
       end
     end
     
-    class Class < ::Struct.new(:name, :namespace, :functions, :superclass, :includes, :signals)
+    class Class < ::Struct.new(:name, :namespace, :functions, :superclass, :includes, :signals,:full_inherit, :full_includes, :descendants)
       def initialize h, q
         super()
         
@@ -205,7 +259,19 @@ class DocGen
           bool and a != q and a.is_a?(GirFFI::Builder::ObjectBuilder::Interface)
         end        
 
-        self[:includes] = w        
+        self[:includes] = w 
+        
+        w=q.ancestors.find_all do |a|
+          bool = a.class == ::Module
+          bool and a != q and !a.is_a?(GirFFI::Builder::ObjectBuilder::Interface)  and a != ::Kernel
+        end        
+
+        self[:full_includes] = w                
+        
+        w=q.ancestors.find_all do |a|
+          a.class == ::Class and a != ::BasicObject and a != q
+        end
+        self[:full_inherit] = w
       end
     end
   end
@@ -305,6 +371,12 @@ class DocGen
       @namespace = ns
       @output = type.new(ns,q)
       @q = q
+      
+      init()
+    end
+    
+    def init
+      
     end
   
     def document
@@ -337,7 +409,7 @@ class DocGen
           
           document_method(k)
         end
-      end      
+      end    
       
       print("\r Extracted #{@q}"+(" "*40)+"\n")
     end
@@ -358,7 +430,7 @@ class DocGen
       sig = DocGen::Output::Signal.new
       sig[:name] = s.name.split("_").join("-")
       sig[:true_stops_emit] = s.true_stops_emit
-      s.args.each do |a| 
+      s.exposed_params.each do |a| 
         (sig[:arguments] ||= []) << arg=DocGen::Output::Argument.from_arg_info(a)
       end
 
@@ -371,7 +443,13 @@ class DocGen
   class Class < Iface
     def initialize ns,q,type = DocGen::Output::Class
       super ns,q,type
-      @output[:superclass] = q.superclass.to_s
+    end
+    def init
+      output[:superclass] = q.superclass.to_s
+    
+      if t=namespace[:interfaces].find do |e| e[:name] == q.superclass.data.name.to_sym end
+        (t[:descendants] ||=[]) << output[:name]
+      end    
     end
   end
   
@@ -402,12 +480,41 @@ class DocGen
       i.is_a?(GObjectIntrospection::IFunctionInfo)
     end.each do |z| 
       document_method z
-    end    
+    end 
+    
+    GirFFI::REPO.infos("#{namespace[:name]}").find_all do |i|
+      i.is_a?(GObjectIntrospection::IConstantInfo)
+    end.each do |z| 
+      document_constant z
+    end  
+    
+    GirFFI::REPO.infos("#{namespace[:name]}").find_all do |i|
+      i.is_a?(GObjectIntrospection::IEnumInfo)
+    end.each do |z| 
+      document_constant z
+    end     
+    
+    GirFFI::REPO.infos("#{namespace[:name]}").find_all do |i|
+      i.is_a?(GObjectIntrospection::IFlagsInfo)
+    end.each do |z| 
+      document_constant z
+    end              
     
     return @namespace
   end
   
   attr_reader :q
+  
+  def document_constant z
+    if z.is_a?(GObjectIntrospection::IConstantInfo)
+      (namespace[:constants]||=[]) << DocGen::Output::Constant.from_constant_info(z)
+    elsif z.is_a?(GObjectIntrospection::IFlagsInfo)
+      (namespace[:constants]||=[]) << DocGen::Output::Constant.from_flags_info(z)      
+    elsif z.is_a?(GObjectIntrospection::IEnumInfo)
+      (namespace[:constants]||=[]) << DocGen::Output::Constant.from_enum_info(z)
+    else
+    end
+  end
   
   def document_method m
     print "\r Extracting #{namespace[:name]}.#{m.name} ..."+(" "*45)
@@ -839,8 +946,6 @@ module YARDGenerator
   end
   
   def self.generate(ns)
-    ns = ns.namespace
-  
     ns[:interfaces].each do |i|
       generate_iface(i,ns)
     end
@@ -862,4 +967,27 @@ module YARDGenerator
   end
 end
 
-
+module DocGen::Generator
+  class Base
+    attr_reader :namespace
+    def initialize(ns)
+      @namespace = ns
+    end
+    
+    def descendants i
+      namespace[:interfaces].find_all do |c|
+        c.is_a?(DocGen::Output::Class) and c[:superclass].to_s == "#{namespace[:name]}::"+i[:name].to_s
+      end.map do |c|
+        "#{namespace[:name]}::#{c[:name]}"
+      end
+    end
+    
+    def implemented i
+      namespace[:interfaces].find_all do |c|
+        c[:includes].map do |q| q.to_s end.index("#{namespace[:name]}::"+i[:name].to_s)
+      end.map do |c|
+        "#{namespace[:name]}::#{c[:name]}"
+      end
+    end    
+  end
+end
